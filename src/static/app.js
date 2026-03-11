@@ -3,6 +3,54 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const signupContainer = document.getElementById("signup-container");
+  const authButton = document.getElementById("auth-button");
+  const adminStatus = document.getElementById("admin-status");
+  const loginModal = document.getElementById("login-modal");
+  const loginForm = document.getElementById("login-form");
+  const cancelLoginButton = document.getElementById("cancel-login");
+
+  let adminToken = localStorage.getItem("adminToken") || "";
+  let adminUsername = localStorage.getItem("adminUsername") || "";
+
+  function isAdminLoggedIn() {
+    return Boolean(adminToken);
+  }
+
+  function showMessage(text, type) {
+    messageDiv.textContent = text;
+    messageDiv.className = type;
+    messageDiv.classList.remove("hidden");
+
+    setTimeout(() => {
+      messageDiv.classList.add("hidden");
+    }, 5000);
+  }
+
+  function updateAuthUI() {
+    if (isAdminLoggedIn()) {
+      adminStatus.textContent = `Teacher: ${adminUsername}`;
+      authButton.textContent = "Logout";
+      authButton.setAttribute("aria-label", "Teacher logout");
+      signupContainer.classList.remove("hidden");
+    } else {
+      adminStatus.textContent = "Student View";
+      authButton.textContent = "👤";
+      authButton.setAttribute("aria-label", "Teacher login");
+      signupContainer.classList.add("hidden");
+    }
+  }
+
+  function openLoginModal() {
+    loginModal.classList.remove("hidden");
+    loginModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeLoginModal() {
+    loginModal.classList.add("hidden");
+    loginModal.setAttribute("aria-hidden", "true");
+    loginForm.reset();
+  }
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -12,6 +60,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Clear loading message
       activitiesList.innerHTML = "";
+      activitySelect.innerHTML = '<option value="">-- Select an activity --</option>';
 
       // Populate activities list
       Object.entries(activities).forEach(([name, details]) => {
@@ -30,7 +79,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 ${details.participants
                   .map(
                     (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
+                      `<li><span class="participant-email">${email}</span>${
+                        isAdminLoggedIn()
+                          ? `<button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button>`
+                          : ""
+                      }</li>`
                   )
                   .join("")}
               </ul>
@@ -80,32 +133,24 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/unregister?email=${encodeURIComponent(email)}`,
         {
           method: "DELETE",
+          headers: {
+            "X-Admin-Token": adminToken,
+          },
         }
       );
 
       const result = await response.json();
 
       if (response.ok) {
-        messageDiv.textContent = result.message;
-        messageDiv.className = "success";
+        showMessage(result.message, "success");
 
         // Refresh activities list to show updated participants
         fetchActivities();
       } else {
-        messageDiv.textContent = result.detail || "An error occurred";
-        messageDiv.className = "error";
+        showMessage(result.detail || "An error occurred", "error");
       }
-
-      messageDiv.classList.remove("hidden");
-
-      // Hide message after 5 seconds
-      setTimeout(() => {
-        messageDiv.classList.add("hidden");
-      }, 5000);
     } catch (error) {
-      messageDiv.textContent = "Failed to unregister. Please try again.";
-      messageDiv.className = "error";
-      messageDiv.classList.remove("hidden");
+      showMessage("Failed to unregister. Please try again.", "error");
       console.error("Error unregistering:", error);
     }
   }
@@ -124,37 +169,96 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/signup?email=${encodeURIComponent(email)}`,
         {
           method: "POST",
+          headers: {
+            "X-Admin-Token": adminToken,
+          },
         }
       );
 
       const result = await response.json();
 
       if (response.ok) {
-        messageDiv.textContent = result.message;
-        messageDiv.className = "success";
+        showMessage(result.message, "success");
         signupForm.reset();
 
         // Refresh activities list to show updated participants
         fetchActivities();
       } else {
-        messageDiv.textContent = result.detail || "An error occurred";
-        messageDiv.className = "error";
+        showMessage(result.detail || "An error occurred", "error");
       }
-
-      messageDiv.classList.remove("hidden");
-
-      // Hide message after 5 seconds
-      setTimeout(() => {
-        messageDiv.classList.add("hidden");
-      }, 5000);
     } catch (error) {
-      messageDiv.textContent = "Failed to sign up. Please try again.";
-      messageDiv.className = "error";
-      messageDiv.classList.remove("hidden");
+      showMessage("Failed to sign up. Please try again.", "error");
       console.error("Error signing up:", error);
     }
   });
 
+  authButton.addEventListener("click", async () => {
+    if (!isAdminLoggedIn()) {
+      openLoginModal();
+      return;
+    }
+
+    try {
+      await fetch("/auth/logout", {
+        method: "POST",
+        headers: {
+          "X-Admin-Token": adminToken,
+        },
+      });
+    } catch (error) {
+      console.error("Logout request failed:", error);
+    }
+
+    adminToken = "";
+    adminUsername = "";
+    localStorage.removeItem("adminToken");
+    localStorage.removeItem("adminUsername");
+    updateAuthUI();
+    fetchActivities();
+    showMessage("Logged out", "info");
+  });
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const username = document.getElementById("teacher-username").value;
+    const password = document.getElementById("teacher-password").value;
+
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ username, password }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        showMessage(result.detail || "Login failed", "error");
+        return;
+      }
+
+      adminToken = result.token;
+      adminUsername = result.username;
+      localStorage.setItem("adminToken", adminToken);
+      localStorage.setItem("adminUsername", adminUsername);
+
+      closeLoginModal();
+      updateAuthUI();
+      fetchActivities();
+      showMessage("Teacher login successful", "success");
+    } catch (error) {
+      showMessage("Login failed. Please try again.", "error");
+      console.error("Login error:", error);
+    }
+  });
+
+  cancelLoginButton.addEventListener("click", () => {
+    closeLoginModal();
+  });
+
   // Initialize app
+  updateAuthUI();
   fetchActivities();
 });
